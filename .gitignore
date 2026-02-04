@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Data and models (user-provided)
+data/*/raw/
+data/*/processed/
+data/*/features/
+models/*.pth
+models/*.index
+models/*.json
+assets/*.pth
+assets/*.onnx
+*.npz
+!data/README.md
+!models/README.md
+!assets/README.md
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs and checkpoints
+*.log
+checkpoints/
+wandb/
+
+# Samples (generated)
+samples/*.wav
+!samples/README.md
