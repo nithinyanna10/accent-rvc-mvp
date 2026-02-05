@@ -7,14 +7,23 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from pathlib import Path
 
 import numpy as np
 import librosa
+from tqdm import tqdm
 
 # Import from repo root
 import sys
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+repo_root = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(repo_root))
+# Patch fairseq before importing ContentEncoder
+try:
+    import patch_fairseq  # noqa: F401
+except ImportError:
+    if (repo_root / "patch_fairseq.py").exists():
+        import patch_fairseq  # noqa: F401
 from rvc.content_encoder import ContentEncoder
 from rvc.pitch_rmvpe import RMVPExtractor, DEFAULT_SR_F0
 from rvc.audio import load_wav, resample
@@ -48,7 +57,17 @@ def main() -> None:
     rmvpe = RMVPExtractor(weights_dir=Path(args.rmvpe_dir), device=args.device)
 
     index = []
-    for i, entry in enumerate(manifest):
+    total = len(manifest)
+    start_time = time.perf_counter()
+
+    pbar = tqdm(
+        enumerate(manifest),
+        total=total,
+        unit="seg",
+        desc="Feature extract",
+        bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]",
+    )
+    for i, entry in pbar:
         path = Path(entry["path"])
         if not path.is_absolute():
             path = processed_dir / path.name
@@ -73,13 +92,18 @@ def main() -> None:
         out_path = out_dir / out_name
         np.savez_compressed(out_path, content=content_np, f0=f0, mel=mel)
         index.append({"path": str(out_path), "duration": entry["duration"], "source": entry.get("source", path.name)})
-        if (i + 1) % 50 == 0:
-            print(f"Processed {i + 1}/{len(manifest)}")
+        elapsed = time.perf_counter() - start_time
+        if i + 1 > 0:
+            rate = (i + 1) / elapsed
+            remaining_seg = total - (i + 1)
+            eta_sec = remaining_seg / rate if rate > 0 else 0
+            pbar.set_postfix(eta=f"{eta_sec/60:.1f}m", rate=f"{rate:.2f} seg/s")
 
+    elapsed_total = time.perf_counter() - start_time
     index_path = out_dir / "feature_index.json"
     with open(index_path, "w") as f:
         json.dump(index, f, indent=2)
-    print(f"Wrote {len(index)} feature files to {out_dir}, index: {index_path}")
+    print(f"Done. Wrote {len(index)} feature files in {elapsed_total/60:.1f} min. Index: {index_path}")
 
 
 if __name__ == "__main__":
