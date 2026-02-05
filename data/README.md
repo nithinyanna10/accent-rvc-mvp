@@ -1,29 +1,41 @@
 # Data (datasets)
 
-You **manually** download and place datasets here. No scraping or auto-download is implemented.
+Datasets are organized and ready for use.
 
-## CMU-ARCTIC BDL (target voice)
+## CMU-ARCTIC BDL (target voice - US English)
 
+- **Location:** `data/cmu_arctic_bdl/raw/`  
+- **Files:** 906 WAV files from BDL speaker  
 - **Source:** [CMU ARCTIC](https://festvox.org/cmu_arctic/)  
-- **Place:** `data/cmu_arctic_bdl/raw/`  
-- Put BDL speaker WAVs in `raw/`.  
-- Then run:  
-  `python -m training.preprocess --raw_dir data/cmu_arctic_bdl/raw --out_dir data/cmu_arctic_bdl/processed ...`  
-  to get `data/cmu_arctic_bdl/processed/` and a manifest.
+- **Usage:**  
+  ```bash
+  python -m training.preprocess \
+    --raw_dir data/cmu_arctic_bdl/raw \
+    --out_dir data/cmu_arctic_bdl/processed \
+    --sr 40000 --min_dur 2.0 --max_dur 6.0
+  ```
 
-## L2-ARCTIC (test inputs)
+## L2-ARCTIC (source - Indian English)
 
+- **Location:** `data/l2_arctic_flat/`  
+- **Speakers:** ASI, RRBI, TNI (Indian English)  
+- **Files:** 3,392 WAV files (prefixed with speaker ID)  
 - **Source:** [L2-ARCTIC](https://psi.engr.tamu.edu/l2-arctic/)  
-- **Place:** e.g. `data/l2_arctic/` or any folder.  
-- Use ASI, RRBI, TNI (or other) WAVs as input to `convert_accent.py --input <path> --output samples/out.wav`.
+- **Usage:**  
+  ```bash
+  python convert_accent.py \
+    --input data/l2_arctic_flat/ASI_arctic_a0001.wav \
+    --output samples/asi_converted.wav \
+    --model_dir models
+  ```
 
-## Layout example
+## Current structure
 
 ```
 data/
   cmu_arctic_bdl/
-    raw/           <- BDL WAVs
-    processed/     <- from preprocess
-    features/      <- from feature_extract
-  l2_arctic/       <- L2-ARCTIC WAVs for conversion
+    raw/           <- 906 BDL WAVs (ready for preprocessing)
+    processed/     <- (created by preprocess.py)
+    features/      <- (created by feature_extract.py)
+  l2_arctic_flat/  <- 3,392 L2-ARCTIC WAVs (ASI, RRBI, TNI)
 ```
