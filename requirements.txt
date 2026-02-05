@@ -8,9 +8,13 @@ numpy>=1.24.0,<2.0.0
 scipy>=1.10.0
 soundfile>=0.12.0
 librosa>=0.10.0
+resampy>=0.4.0
 
 # Optional: ONNX runtime for ContentVec/RMVPE if using ONNX export
 # onnxruntime>=1.15.0
+
+# ContentVec (fairseq) - install from git if using checkpoint_best_*.pt
+# pip install "git+https://github.com/facebookresearch/fairseq.git"
 
 # Config and CLI
 tqdm>=4.65.0
