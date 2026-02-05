@@ -101,6 +101,12 @@ def convert_file(
             index_feat=index_feat,
             index_rate=params.index_rate,
         )
+        # Denormalize mel if model was trained with --normalize_mel
+        cfg = vc.config
+        if cfg.get("mel_normalize") and mel_or_wav.dim() == 3 and mel_or_wav.shape[1] > 1:
+            mel_mean = cfg.get("mel_mean", -20.0)
+            mel_std = cfg.get("mel_std", 10.0)
+            mel_or_wav = mel_or_wav * mel_std + mel_mean
         if mel_or_wav.dim() == 3 and mel_or_wav.shape[1] > 1:
             # mel [B, n_mel, T] -> vocoder
             wav_chunk = vocoder.decode(mel_or_wav.squeeze(0))
