@@ -7,6 +7,17 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Optional
+import sys
+
+# Patch fairseq before any imports
+try:
+    import patch_fairseq  # noqa: F401
+except ImportError:
+    # If patch_fairseq.py is not in path, try to import from parent
+    parent_dir = Path(__file__).resolve().parent.parent
+    if (parent_dir / "patch_fairseq.py").exists():
+        sys.path.insert(0, str(parent_dir))
+        import patch_fairseq  # noqa: F401
 
 import numpy as np
 import torch
@@ -38,22 +49,73 @@ class ContentEncoder:
     def _load_model(self) -> torch.nn.Module:
         if self._model is not None:
             return self._model
+        
         raise_missing_weights(
             "ContentEncoder",
             self.weights_dir,
             "Download ContentVec/HuBERT-Soft weights and place in assets/contentvec/ (e.g. contentvec_256.pt).",
         )
         d = Path(self.weights_dir)
-        for name in ("contentvec_256.pt", "contentvec.pt", "hubert_soft.pt"):
+        for name in ("contentvec_256.pt", "contentvec_500.pt", "contentvec.pt", "hubert_soft.pt", "checkpoint_best_100.pt", "checkpoint_best_500.pt"):
             p = d / name
             if p.exists():
-                self._model = torch.load(p, map_location=self.device, weights_only=False)
-                if hasattr(self._model, "eval"):
+                checkpoint = torch.load(p, map_location=self.device, weights_only=False)
+                
+                # Check if it's a fairseq checkpoint dict with state_dict
+                if isinstance(checkpoint, dict) and "model" in checkpoint:
+                    # This is a fairseq checkpoint - modify cfg and reload
+                    try:
+                        from fairseq import checkpoint_utils
+                        from omegaconf import OmegaConf
+                        import tempfile
+                        import os
+                        
+                        # fairseq only has "hubert" in MODEL_REGISTRY, not "contentvec"
+                        # Modify checkpoint cfg: task=hubert_pretraining, model=hubert
+                        cfg_dict = checkpoint.get("cfg", {})
+                        cfg = OmegaConf.create(cfg_dict)
+                        if "task" in cfg:
+                            cfg.task._name = "hubert_pretraining"
+                        if "model" in cfg:
+                            cfg.model._name = "hubert"
+                        checkpoint["cfg"] = OmegaConf.to_container(cfg, resolve=True)
+                        
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=".pt") as tmp_file:
+                            torch.save(checkpoint, tmp_file.name)
+                            tmp_path = tmp_file.name
+                        try:
+                            models, args, task = checkpoint_utils.load_model_ensemble_and_task(
+                                [tmp_path],
+                                arg_overrides={"data": "/tmp"},
+                                strict=False,  # ContentVec 500 has extra layers/keys
+                            )
+                            model = models[0]
+                            self._model = model
+                        finally:
+                            if os.path.exists(tmp_path):
+                                os.unlink(tmp_path)
+                    except (ImportError, ValueError, AttributeError, KeyError) as e:
+                        raise ImportError(
+                            f"Failed to load ContentVec checkpoint: {e}\n"
+                            "The checkpoint_best_*.pt format requires fairseq, which has Python 3.12 compatibility issues.\n"
+                            "SOLUTION: Download contentvec_256.pt (standalone model) from:\n"
+                            "  https://github.com/auspicious3000/contentvec/releases\n"
+                            "Place it in assets/contentvec/contentvec_256.pt"
+                        )
+                elif isinstance(checkpoint, dict):
+                    # Try to use as-is
+                    self._model = checkpoint
+                else:
+                    # Direct model instance
+                    self._model = checkpoint
+                
+                # Set to eval mode if it's a model
+                if hasattr(self._model, "eval") and not isinstance(self._model, dict):
                     self._model.eval()
                 return self._model
         raise FileNotFoundError(
             f"ContentEncoder: no known weight file in {d}. "
-            "Place contentvec_256.pt (or contentvec.pt / hubert_soft.pt) in assets/contentvec/."
+            "Place contentvec_256.pt, contentvec.pt, hubert_soft.pt, or checkpoint_best_*.pt in assets/contentvec/."
         )
 
     def encode(
@@ -88,13 +150,15 @@ class ContentEncoder:
 
         x = torch.from_numpy(wav_16k).unsqueeze(0).to(self.device)
         with torch.no_grad():
-            # Common ContentVec interface: (B, T) -> (B, T', C)
+            # Handle fairseq HubertModel
             if hasattr(model, "extract_features"):
-                feat = model.extract_features(x)
-            elif callable(model):
-                feat = model(x)
+                feat = model.extract_features(x, padding_mask=None, mask=False)[0]
+            elif hasattr(model, "forward"):
+                feat = model(x, padding_mask=None, mask=False)
+                if isinstance(feat, (list, tuple)):
+                    feat = feat[0]
             else:
-                feat = model(x) if hasattr(model, "forward") else model(x)
+                feat = model(x)
             if isinstance(feat, (list, tuple)):
                 feat = feat[0]
             feat = feat.squeeze(0)
