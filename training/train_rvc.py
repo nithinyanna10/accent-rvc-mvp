@@ -72,9 +72,12 @@ def main() -> None:
     parser.add_argument("--steps", type=int, default=2000)
     parser.add_argument("--save_every", type=int, default=500)
     parser.add_argument("--lr", type=float, default=1e-4)
-    parser.add_argument("--content_dim", type=int, default=256)
+    parser.add_argument("--content_dim", type=int, default=None, help="Content feature dim (default: infer from data; 256 for contentvec_256, 768 for contentvec_500)")
     parser.add_argument("--mel_dim", type=int, default=80)
     parser.add_argument("--device", type=str, default="cpu")
+    parser.add_argument("--normalize_mel", action="store_true", help="Normalize mel to ~0 mean, 1 std so loss is in reasonable range (not hundreds)")
+    parser.add_argument("--mel_mean", type=float, default=-20.0, help="Mel mean for normalization (typical dB mel ~-20)")
+    parser.add_argument("--mel_std", type=float, default=10.0, help="Mel std for normalization")
     args = parser.parse_args()
 
     feature_dir = Path(args.feature_dir)
@@ -84,6 +87,10 @@ def main() -> None:
     data = load_features(feature_dir)
     if not data:
         raise FileNotFoundError(f"No .npz features in {feature_dir}. Run feature_extract first.")
+    # Infer content_dim from data if not set (ContentVec 256 -> 256, ContentVec 500 -> 768)
+    if args.content_dim is None:
+        args.content_dim = int(data[0][0].shape[1])
+        print(f"Inferred content_dim={args.content_dim} from features")
     print(f"Loaded {len(data)} segments")
 
     device = torch.device(args.device)
@@ -120,6 +127,8 @@ def main() -> None:
             mel_target[i, : min(dm, mel_dim), : min(tm, t)] = torch.from_numpy(
                 m[:mel_dim, : min(tm, t)].astype(np.float32)
             )
+        if args.normalize_mel:
+            mel_target = (mel_target - args.mel_mean) / (args.mel_std + 1e-8)
         return content_t, f0_t, mel_target
 
     step = 0
@@ -146,6 +155,9 @@ def main() -> None:
                 "mel_dim": args.mel_dim,
                 "sample_rate": 40000,
                 "preprocess": "contentvec_16k, rmvpe_f0",
+                "mel_normalize": args.normalize_mel,
+                "mel_mean": args.mel_mean,
+                "mel_std": args.mel_std,
             }
             with open(model_dir / "config.json", "w") as f:
                 json.dump(config, f, indent=2)
@@ -157,6 +169,9 @@ def main() -> None:
         "mel_dim": args.mel_dim,
         "sample_rate": 40000,
         "preprocess": "contentvec_16k, rmvpe_f0",
+        "mel_normalize": args.normalize_mel,
+        "mel_mean": args.mel_mean,
+        "mel_std": args.mel_std,
     }
     with open(model_dir / "config.json", "w") as f:
         json.dump(config, f, indent=2)
