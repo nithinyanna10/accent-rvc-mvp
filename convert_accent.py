@@ -24,6 +24,7 @@ def main() -> int:
     parser.add_argument("--output", "-o", required=True, help="Output WAV path")
     parser.add_argument("--model_dir", type=str, default="models", help="Directory with bdl_rvc.pth + config.json")
     parser.add_argument("--device", type=str, default="cpu", help="Device (default: cpu)")
+    parser.add_argument("--streaming", type=int, default=1, choices=(0, 1), help="1=chunked 160ms+OLA (default), 0=full-file (use for debugging quality)")
     parser.add_argument("--window_ms", type=float, default=160.0, help="Chunk window ms (default: 160)")
     parser.add_argument("--hop_ms", type=float, default=80.0, help="Hop ms (default: 80)")
     parser.add_argument("--index_rate", type=float, default=0.0, help="Retrieval index blend 0..1 (default: 0)")
@@ -36,6 +37,7 @@ def main() -> int:
     parser.add_argument("--contentvec_dir", type=str, default="assets/contentvec", help="ContentVec weights dir")
     parser.add_argument("--rmvpe_dir", type=str, default="assets/rmvpe", help="RMVPE weights dir")
     parser.add_argument("--vocoder_dir", type=str, default=None, help="HiFi-GAN weights dir (default: model_dir)")
+    parser.add_argument("--out_sr", type=int, default=None, help="Output sample rate (default: model 40000). Use 44100 for playback compatibility.")
     args = parser.parse_args()
 
     model_dir = Path(args.model_dir)
@@ -46,6 +48,7 @@ def main() -> int:
 
     params = InferenceParams(
         device=args.device,
+        streaming=bool(args.streaming),
         window_ms=args.window_ms,
         hop_ms=args.hop_ms,
         silence_db=args.silence_db,
@@ -59,6 +62,7 @@ def main() -> int:
         rmvpe_dir=Path(args.rmvpe_dir) if args.rmvpe_dir else None,
         vocoder_dir=Path(args.vocoder_dir) if args.vocoder_dir else None,
         cpu_threads=args.cpu_threads,
+        out_sr=args.out_sr,
     )
     try:
         params.validate()
@@ -73,10 +77,12 @@ def main() -> int:
         return 1
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    print(f"Converting: {input_path} -> {output_path} (device={params.device}, window={params.window_ms}ms)")
+    mode = "streaming" if params.streaming else "full-file"
+    print(f"Converting: {input_path} -> {output_path} (device={params.device}, mode={mode})")
     try:
         convert_file(input_path, output_path, model_dir, params)
-        print(f"Done: {output_path}")
+        out_rate = params.out_sr or params.sample_rate
+        print(f"Done: {output_path} ({out_rate} Hz)")
     except FileNotFoundError as e:
         print(f"Error (missing weights): {e}", file=sys.stderr)
         return 1
