@@ -1,5 +1,12 @@
 # Training Commands for Accent RVC MVP
 
+## Pipeline sample rate: 22.05 kHz
+
+The pipeline runs at **22,050 Hz** end-to-end to match jik876 HiFi-GAN (no mel time-downsample).  
+**Re-extract features and re-train** if you previously used 40k; use 22k for preprocessing (`--sr 22050` if your preprocess script supports it).
+
+---
+
 ## ⚠️ IMPORTANT: Python 3.12 Compatibility Issue
 
 **Current Issue:** The `checkpoint_best_500.pt` ContentVec model requires fairseq, which has Python 3.12 compatibility issues. 
