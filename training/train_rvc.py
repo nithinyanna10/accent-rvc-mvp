@@ -69,8 +69,8 @@ def main() -> None:
     parser.add_argument("--name", type=str, default="bdl", help="Model name (output: {name}_rvc.pth)")
     parser.add_argument("--batch_size", type=int, default=4)
     parser.add_argument("--accum", type=int, default=4, help="Gradient accumulation steps")
-    parser.add_argument("--steps", type=int, default=2000)
-    parser.add_argument("--save_every", type=int, default=500)
+    parser.add_argument("--steps", type=int, default=30000, help="Training steps (30k+ recommended for intelligible voice)")
+    parser.add_argument("--save_every", type=int, default=2000, help="Save checkpoint every N steps (listen to samples)")
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--content_dim", type=int, default=None, help="Content feature dim (default: infer from data; 256 for contentvec_256, 768 for contentvec_500)")
     parser.add_argument("--mel_dim", type=int, default=80)
@@ -153,7 +153,7 @@ def main() -> None:
             config = {
                 "content_dim": args.content_dim,
                 "mel_dim": args.mel_dim,
-                "sample_rate": 40000,
+                "sample_rate": 22050,
                 "preprocess": "contentvec_16k, rmvpe_f0",
                 "mel_normalize": args.normalize_mel,
                 "mel_mean": args.mel_mean,
@@ -167,7 +167,7 @@ def main() -> None:
     config = {
         "content_dim": args.content_dim,
         "mel_dim": args.mel_dim,
-        "sample_rate": 40000,
+        "sample_rate": 22050,
         "preprocess": "contentvec_16k, rmvpe_f0",
         "mel_normalize": args.normalize_mel,
         "mel_mean": args.mel_mean,
