@@ -27,11 +27,7 @@ except ImportError:
 from rvc.content_encoder import ContentEncoder
 from rvc.pitch_rmvpe import RMVPExtractor, DEFAULT_SR_F0
 from rvc.audio import load_wav, resample
-
-MEL_SR = 40000
-MEL_N_FFT = 1024
-MEL_HOP = 256
-MEL_N_MELS = 80
+from rvc.mel_config import DEFAULT_MEL_CONFIG
 
 
 def main() -> None:
@@ -73,19 +69,21 @@ def main() -> None:
             path = processed_dir / path.name
         if not path.exists():
             path = processed_dir / Path(entry["path"]).name
-        wav = load_wav(path, 40000)
-        wav_16k = resample(wav, 40000, DEFAULT_SR_F0)
+        cfg = DEFAULT_MEL_CONFIG
+        wav = load_wav(path, cfg.sr)
+        wav_16k = resample(wav, cfg.sr, DEFAULT_SR_F0)
         content = encoder.encode(wav_16k, cache=True, cache_key=path.name)
         content_np = content.cpu().numpy()
         f0 = rmvpe.extract_f0(wav_16k, DEFAULT_SR_F0)
         mel = librosa.feature.melspectrogram(
             y=wav.astype(np.float64),
-            sr=MEL_SR,
-            n_fft=MEL_N_FFT,
-            hop_length=MEL_HOP,
-            n_mels=MEL_N_MELS,
-            fmin=0,
-            fmax=8000,
+            sr=cfg.sr,
+            n_fft=cfg.n_fft,
+            hop_length=cfg.hop_length,
+            win_length=cfg.win_length,
+            n_mels=cfg.n_mels,
+            fmin=cfg.fmin,
+            fmax=cfg.fmax,
         )
         mel = librosa.power_to_db(mel, ref=1.0).astype(np.float32)
         out_name = path.stem + ".npz"
