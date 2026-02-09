@@ -12,8 +12,9 @@ class InferenceParams:
     """Parameters for convert_accent pipeline."""
 
     device: str = "cpu"
-    sample_rate: int = 40000
-    # Streaming: 160 ms window, 80 ms hop (no future leak)
+    sample_rate: int = 22050  # match jik876 HiFi-GAN (no mel time-downsample)
+    # Streaming: 160 ms window, 80 ms hop (no future leak). If False, process whole file at once (better for debugging).
+    streaming: bool = True
     window_ms: float = 160.0
     hop_ms: float = 80.0
     # Silence gate
@@ -30,6 +31,8 @@ class InferenceParams:
     rmvpe_dir: Optional[Path] = None
     vocoder_dir: Optional[Path] = None
     index_path: Optional[Path] = None
+    # Output: save at model SR (sample_rate) unless out_sr is set (e.g. 44100 for playback)
+    out_sr: Optional[int] = None  # None = use sample_rate (40000)
     # Optional
     cpu_threads: int = 0  # 0 = default
 
