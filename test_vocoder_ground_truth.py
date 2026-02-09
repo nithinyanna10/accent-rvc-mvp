@@ -15,17 +15,13 @@ import librosa
 # Repo root
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from rvc.audio import load_wav, resample
-from rvc.vocoder_hifigan import HiFiGANVocoder
+from rvc.audio import load_wav
+from rvc.mel_config import DEFAULT_MEL_CONFIG
 from rvc.hifigan_jik876 import load_jik876_checkpoint
 
 
 def main():
-    # Same mel params as training (feature_extract.py)
-    MEL_SR = 40000
-    MEL_N_FFT = 1024
-    MEL_HOP = 256
-    MEL_N_MELS = 80
+    cfg = DEFAULT_MEL_CONFIG
 
     input_wav = Path("samples/original_input.wav")
     if not input_wav.exists():
@@ -38,19 +34,20 @@ def main():
     out_wav.parent.mkdir(parents=True, exist_ok=True)
 
     print(f"Loading: {input_wav}")
-    wav = load_wav(input_wav, MEL_SR)
+    wav = load_wav(input_wav, cfg.sr)
     if wav.ndim > 1:
         wav = wav.mean(axis=1)
 
-    # Ground truth mel exactly as in training
+    # Ground truth mel exactly as in training (single MelConfig)
     mel_power = librosa.feature.melspectrogram(
         y=wav.astype(np.float64),
-        sr=MEL_SR,
-        n_fft=MEL_N_FFT,
-        hop_length=MEL_HOP,
-        n_mels=MEL_N_MELS,
-        fmin=0,
-        fmax=8000,
+        sr=cfg.sr,
+        n_fft=cfg.n_fft,
+        hop_length=cfg.hop_length,
+        win_length=cfg.win_length,
+        n_mels=cfg.n_mels,
+        fmin=cfg.fmin,
+        fmax=cfg.fmax,
     )
     mel_db = librosa.power_to_db(mel_power, ref=1.0).astype(np.float32)  # [80, T]
 
@@ -61,45 +58,25 @@ def main():
         return 1
     model = load_jik876_checkpoint(ckpt, "cpu")
 
-    # Convert dB mel -> log mel (same as in vocoder_hifigan._decode_jik876_hifigan)
+    # Convert dB mel -> log mel. Mel is already at 22.05k (cfg.sr), no time-downsample.
     mel_power_gt = librosa.db_to_power(mel_db, ref=1.0)
     mel_log = np.log(np.clip(mel_power_gt, 1e-5, None)).astype(np.float32)
-    n_mels, T = mel_log.shape
 
-    # Downsample time for 22k vocoder
-    T_22k = max(1, int(T * 22050 / 40000))
-    mel_22k = np.zeros((n_mels, T_22k), dtype=np.float32)
-    for i in range(n_mels):
-        mel_22k[i] = np.interp(
-            np.linspace(0, T - 1, T_22k),
-            np.arange(T),
-            mel_log[i],
-        )
-
-    # Vocode
-    x = torch.from_numpy(mel_22k).unsqueeze(0)
+    # Vocode at 22.05 kHz (no hack)
+    x = torch.from_numpy(mel_log).unsqueeze(0)
     with torch.no_grad():
-        wav_22k = model(x).squeeze().cpu().numpy()
+        wav_out = model(x).squeeze().cpu().numpy()
 
-    # Resample to 40k
-    wav_40k = librosa.resample(
-        wav_22k.astype(np.float64),
-        orig_sr=22050,
-        target_sr=40000,
-        res_type="kaiser_best",
-    )
-
-    # Normalize
-    mx = np.abs(wav_40k).max()
-    if mx > 0:
-        wav_40k = (wav_40k / mx * 0.9).astype(np.float32)
-    else:
-        wav_40k = wav_40k.astype(np.float32)
+    # Normalize to -1 dBFS
+    peak = 10.0 ** (-1.0 / 20.0)
+    mx = np.abs(wav_out).max()
+    if mx > 1e-8:
+        wav_out = (wav_out / mx * peak).astype(np.float32)
 
     import soundfile as sf
-    sf.write(out_wav, wav_40k, 40000)
-    print(f"Saved: {out_wav}")
-    print("Listen to it: if CLEAR SPEECH -> vocoder is fine, problem is the model output.")
+    sf.write(out_wav, wav_out, cfg.sr)
+    print(f"Saved: {out_wav} ({cfg.sr} Hz)")
+    print("Listen at 22.05 kHz: if CLEAR SPEECH -> vocoder is fine; if NOISE -> mel/vocoder mismatch.")
     print("If NOISE -> our mel->vocoder conversion is wrong.")
     return 0
 
