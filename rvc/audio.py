@@ -29,11 +29,25 @@ def load_wav(path: str | Path, sr: int, mono: bool = True) -> np.ndarray:
 
 
 def save_wav(path: str | Path, audio: np.ndarray, sr: int) -> None:
-    """Write float32 audio to WAV. Clips to [-1, 1] if needed."""
+    """Write float32 audio to WAV at sample rate sr. Caller should normalize/limit before this."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     audio = np.clip(audio, -1.0, 1.0).astype(np.float32)
     sf.write(path, audio, sr)
+
+
+def normalize_to_dbfs(audio: np.ndarray, dbfs: float = -1.0) -> np.ndarray:
+    """Normalize so peak is at dbfs (e.g. -1 dBFS). Prevents clipping distortion."""
+    peak = 10.0 ** (dbfs / 20.0)  # -1 dBFS -> ~0.891
+    mx = np.abs(audio).max()
+    if mx < 1e-8:
+        return audio
+    return (audio / mx * peak).astype(np.float32)
+
+
+def soft_limit(audio: np.ndarray) -> np.ndarray:
+    """Clip to [-1, 1] to catch any remaining overs (e.g. after OLA)."""
+    return np.clip(audio, -1.0, 1.0).astype(np.float32)
 
 
 def normalize_peak(audio: np.ndarray, peak: float = 0.95) -> np.ndarray:
@@ -54,3 +68,31 @@ def resample(wav: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarray:
         target_sr=target_sr,
         res_type="kaiser_best",
     ).astype(np.float32)
+
+
+def silence_gate_rms(
+    wav: np.ndarray,
+    sr: int,
+    window_sec: float = 0.02,
+    threshold_dbfs: float = -45.0,
+) -> np.ndarray:
+    """Zero out regions where RMS is below threshold (reduces gargling in pauses)."""
+    if len(wav) < 10 or sr <= 0:
+        return wav
+    window = max(1, int(sr * window_sec))
+    out = wav.astype(np.float64)
+    threshold_linear = 10.0 ** (threshold_dbfs / 20.0)
+    for i in range(0, len(out) - window, window):
+        chunk = out[i : i + window]
+        rms = np.sqrt(np.mean(chunk ** 2) + 1e-12)
+        if rms < threshold_linear:
+            out[i : i + window] = 0.0
+    # last partial window
+    if len(out) % window:
+        i = (len(out) // window) * window
+        if i < len(out):
+            chunk = out[i:]
+            rms = np.sqrt(np.mean(chunk ** 2) + 1e-12)
+            if rms < threshold_linear:
+                out[i:] = 0.0
+    return out.astype(np.float32)
