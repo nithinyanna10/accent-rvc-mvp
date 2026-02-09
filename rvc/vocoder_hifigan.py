@@ -12,6 +12,7 @@ import numpy as np
 import torch
 
 from .utils import raise_missing_weights
+from .mel_config import DEFAULT_MEL_CONFIG
 
 
 class HiFiGANVocoder:
@@ -220,44 +221,18 @@ class HiFiGANVocoder:
         return out.astype(np.float32)
     
     def _decode_jik876_hifigan(self, mel_or_features: torch.Tensor, model: torch.nn.Module) -> np.ndarray:
-        """Decode using jik876 HiFi-GAN: convert our dB mel -> log mel, downsample time for 22k, vocode, resample to 40k."""
+        """Decode with jik876 HiFi-GAN at 22.05 kHz. Mel must already be at 22k frame rate (sr/256 fps). No time-downsample hack."""
         import librosa
-        # mel: [B, 80, T] in dB (our training). jik876 expects log(magnitude), 22.05 kHz (hop 256).
-        # Convert dB -> log: log(magnitude) = dB * ln(10)/20
         mel = mel_or_features.float().to(self.device)
         if mel.dim() == 2:
             mel = mel.unsqueeze(0)
-        mel_np = mel.squeeze(0).cpu().numpy()  # [80, T]
-        # dB to power then to log(magnitude): log(sqrt(power)) = 0.5*log(power)
+        mel_np = mel.squeeze(0).cpu().numpy()  # [80, T] at vocoder frame rate (sr/256)
         mel_power = librosa.db_to_power(mel_np, ref=1.0)
-        mel_log = np.log(np.clip(mel_power, 1e-5, None)).astype(np.float32)  # natural log
-        # Downsample time: 40k has 40000/256 frames/sec, 22k has 22050/256. T' = T * 22050/40000
-        n_mels, T = mel_log.shape
-        T_22k = max(1, int(T * 22050 / 40000))
-        mel_22k = np.zeros((n_mels, T_22k), dtype=np.float32)
-        for i in range(n_mels):
-            mel_22k[i] = np.interp(
-                np.linspace(0, T - 1, T_22k),
-                np.arange(T),
-                mel_log[i],
-            )
-        x = torch.from_numpy(mel_22k).unsqueeze(0).to(self.device)
+        mel_log = np.log(np.clip(mel_power, 1e-5, None)).astype(np.float32)
+        x = torch.from_numpy(mel_log).unsqueeze(0).to(self.device)
         with torch.no_grad():
-            wav_22k = model(x).squeeze().cpu().numpy()
-        # Resample 22050 -> 40000 so duration matches our expected T*256/40000
-        wav_40k = librosa.resample(
-            wav_22k.astype(np.float64),
-            orig_sr=22050,
-            target_sr=self.sr,
-            res_type="kaiser_best",
-        )
-        # Our chunk expects length T*256 (at 40k). wav_40k length = len(wav_22k)*40000/22050. Match by trimming/padding
-        target_len = T * 256  # frames at 40k hop
-        if len(wav_40k) > target_len:
-            wav_40k = wav_40k[:target_len]
-        elif len(wav_40k) < target_len:
-            wav_40k = np.pad(wav_40k, (0, target_len - len(wav_40k)), mode="constant", constant_values=0)
-        return wav_40k.astype(np.float32)
+            wav_out = model(x).squeeze().cpu().numpy()
+        return wav_out.astype(np.float32)
     
     def _decode_fallback_griffin_lim(self, mel_or_features: torch.Tensor) -> np.ndarray:
         """Fallback vocoder using librosa's mel_to_audio (simpler and more reliable)."""
@@ -277,11 +252,10 @@ class HiFiGANVocoder:
             mel = mel.T
         
         n_mels, n_frames = mel.shape
-        
-        # Parameters MUST match training exactly
-        sr = self.sr
-        n_fft = 1024  # Match training MEL_N_FFT
-        hop_length = 256  # Match training MEL_HOP
+        cfg = DEFAULT_MEL_CONFIG
+        sr = cfg.sr
+        n_fft = cfg.n_fft
+        hop_length = cfg.hop_length
         
         # RVC mel spectrograms are in dB scale (from librosa.power_to_db during training)
         # Convert from dB to power: librosa.db_to_power(mel_db, ref=1.0)
@@ -298,8 +272,8 @@ class HiFiGANVocoder:
                 n_fft=n_fft,
                 hop_length=hop_length,
                 n_iter=20,  # Reduced for speed (was 60)
-                fmin=0,
-                fmax=8000,  # Match training fmax
+                fmin=cfg.fmin,
+                fmax=cfg.fmax,
             )
         except AttributeError:
             # librosa.feature.inverse might not exist in older versions
@@ -312,8 +286,8 @@ class HiFiGANVocoder:
                 sr=sr,
                 n_fft=n_fft,
                 n_mels=n_mels,
-                fmin=0,
-                fmax=8000,
+                fmin=cfg.fmin,
+                fmax=cfg.fmax,
                 norm=None,
                 htk=False,
             )
