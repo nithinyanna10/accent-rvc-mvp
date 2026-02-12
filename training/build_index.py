@@ -1,7 +1,9 @@
+#!/usr/bin/env python3
 """
-Optional retrieval index (RVC-style): build embeddings from content features.
-faiss-cpu if available; else sklearn NearestNeighbors.
-Output models/bdl.index + metadata.
+Build kNN index from BDL (target) content features for retrieval at inference.
+Blending with this index (index_rate 0.6–0.9) pushes pronunciation toward target (accent reduction).
+Usage:
+  python training/build_index.py --feature_dir data/cmu_arctic_bdl/features --model_dir models [--k 16]
 """
 
 from __future__ import annotations
@@ -13,18 +15,18 @@ from pathlib import Path
 import numpy as np
 
 try:
-    import faiss
-    HAS_FAISS = True
+    from sklearn.neighbors import NearestNeighbors
 except ImportError:
-    HAS_FAISS = False
-from sklearn.neighbors import NearestNeighbors
+    raise ImportError("Install scikit-learn: pip install scikit-learn")
+
+import pickle
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Build retrieval index from content features.")
-    parser.add_argument("--feature_dir", type=str, required=True, help="Feature directory (with .npz + index)")
-    parser.add_argument("--model_dir", type=str, default="models", help="Output directory for index")
-    parser.add_argument("--name", type=str, default="bdl", help="Index name (output: {name}.index)")
+    parser = argparse.ArgumentParser(description="Build retrieval index from BDL content features.")
+    parser.add_argument("--feature_dir", type=str, required=True, help="BDL feature dir (with .npz + feature_index.json)")
+    parser.add_argument("--model_dir", type=str, default="models", help="Save index to this dir (bdl_index.npz + bdl_index_nn.joblib)")
+    parser.add_argument("--k", type=int, default=16, help="Default k for kNN (8–16 typical)")
     args = parser.parse_args()
 
     feature_dir = Path(args.feature_dir)
@@ -32,43 +34,37 @@ def main() -> None:
     model_dir.mkdir(parents=True, exist_ok=True)
 
     index_path = feature_dir / "feature_index.json"
-    if not index_path.exists():
-        paths = list(feature_dir.glob("*.npz"))
-    else:
+    if index_path.exists():
         with open(index_path) as f:
             index = json.load(f)
         paths = [Path(e["path"]) for e in index]
-        paths = [p if p.exists() else feature_dir / p.name for p in paths]
-    paths = [p for p in paths if p.exists()]
-    if not paths:
-        raise FileNotFoundError(f"No feature .npz in {feature_dir}")
-
-    embeddings = []
-    for p in paths:
-        d = np.load(p)
-        c = d["content"]
-        embeddings.append(c)
-    X = np.vstack(embeddings).astype(np.float32)
-    print(f"Index shape: {X.shape}")
-
-    if HAS_FAISS:
-        d = X.shape[1]
-        indexer = faiss.IndexFlatL2(d)
-        indexer.add(X)
-        out_path = model_dir / f"{args.name}.index"
-        faiss.write_index(indexer, str(out_path))
-        meta = {"n_vectors": X.shape[0], "dim": d, "type": "faiss"}
     else:
-        nbrs = NearestNeighbors(n_neighbors=min(8, len(X)), algorithm="auto", metric="euclidean")
-        nbrs.fit(X)
-        out_path = model_dir / f"{args.name}_sklearn.npz"
-        # Save X for later knn query
-        np.savez_compressed(out_path, embeddings=X, paths=[str(p) for p in paths])
-        meta = {"n_vectors": X.shape[0], "dim": X.shape[1], "type": "sklearn", "path": str(out_path)}
-    meta_path = model_dir / f"{args.name}_index_meta.json"
-    with open(meta_path, "w") as f:
-        json.dump(meta, f, indent=2)
-    print(f"Wrote index to {model_dir}, meta: {meta_path}")
+        paths = list(feature_dir.glob("*.npz"))
+
+    rows = []
+    for p in paths:
+        if not p.exists():
+            p = feature_dir / Path(p).name
+        if not p.exists():
+            continue
+        d = np.load(p)
+        c = d["content"]  # [T, C]
+        rows.append(c)
+    if not rows:
+        raise FileNotFoundError(f"No .npz content in {feature_dir}")
+
+    data = np.vstack(rows).astype(np.float32)
+    n_neighbors = min(args.k, len(data))
+    nn = NearestNeighbors(n_neighbors=n_neighbors, metric="cosine", algorithm="brute")
+    nn.fit(data)
+
+    np.savez_compressed(model_dir / "bdl_index.npz", data=data)
+    with open(model_dir / "bdl_index_nn.pkl", "wb") as f:
+        pickle.dump({"nn": nn, "k": args.k}, f)
+
+    print(f"Built index: {data.shape[0]} vectors, dim {data.shape[1]}, k={args.k}")
+    print(f"Saved: {model_dir / 'bdl_index.npz'}, {model_dir / 'bdl_index_nn.pkl'}")
+    print("Use: convert_accent.py ... --index_rate 0.6 --protect 0.2")
 
 
 if __name__ == "__main__":
