@@ -1,8 +1,20 @@
 # accent_rvc_mvp
 
-**Indian English → US English accent conversion (MVP)** using the RVC v2 / Soft-VC stack: ContentVec content encoder, RMVPE pitch, HiFi-GAN v2 vocoder. This repo is **CPU-only** (no CUDA, no MPS), runs on macOS with Python 3.10+ via venv and pip, and is structured for a later Windows port.
+**Indian English → US English accent conversion** using the **RVC v2 (Soft-VC)** architecture:
 
-**What it does:** Takes a WAV (e.g. L2-ARCTIC Indian English) and a trained target-voice model (e.g. CMU-ARCTIC BDL), and outputs a converted WAV that sounds like the target speaker while preserving intonation and reducing accent. Inference is streaming-shaped (160 ms windows + overlap-add) to avoid future leak.
+- **Content encoder:** ContentVec (strips source accent)
+- **Pitch:** RMVPE
+- **Vocoder:** HiFi-GAN v2
+
+**Source data:** L2-ARCTIC (speakers ASI, RRBI, TNI). **Target data:** CMU-ARCTIC (BDL) or LJSpeech.
+
+**Inference:** One script, WAV in → WAV out (target speaker, preserved intonation, accent reduced). See **PIPELINE_SPEC.md** for the full specification.
+
+```bash
+python run_inference.py -i input.wav -o output.wav --model_dir models [--model_name bdl_accent]
+```
+
+This repo is **CPU-only** (no CUDA, no MPS), runs on macOS with Python 3.10+ via venv and pip.
 
 **What it doesn’t:** No automatic dataset downloads (you place CMU-ARCTIC and L2-ARCTIC manually). No GUI/WebUI; CLI only. Training is CPU-friendly but slower than GPU; use short clips for iteration.
 
@@ -71,14 +83,17 @@ python -m training.build_index \
 
 Produces `models/bdl.index` (and metadata) for `--index_rate` at inference.
 
-### 7. Convert L2-ARCTIC samples
+### 7. Run inference (WAV → WAV)
 
 ```bash
-python convert_accent.py \
-  --input data/l2_arctic/sample.wav \
-  --output samples/sample_bdl.wav \
-  --model_dir models \
-  --device cpu
+# Minimal
+python run_inference.py -i data/l2_arctic/sample.wav -o samples/sample_bdl.wav --model_dir models
+
+# Accent model (trained with train_accent.py)
+python run_inference.py -i input.wav -o output.wav --model_dir models --model_name bdl_accent
+
+# Full options (streaming, sample rate, etc.)
+python convert_accent.py --input input.wav --output output.wav --model_dir models --streaming 0
 ```
 
 
