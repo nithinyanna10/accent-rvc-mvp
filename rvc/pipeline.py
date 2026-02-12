@@ -20,6 +20,7 @@ from .audio import (
     normalize_to_dbfs,
     soft_limit,
     silence_gate_rms,
+    silence_gate_rms_smooth,
 )
 from .streaming import StreamingChunker, OverlapAdd
 from .silence_gate import SilenceGate
@@ -27,13 +28,14 @@ from .content_encoder import ContentEncoder
 from .pitch_rmvpe import RMVPExtractor, DEFAULT_SR_F0
 from .vocoder_hifigan import HiFiGANVocoder
 from .vc_model import VCModel
+from .retrieval_index import load_index
 
 
 # Content encoder frame rate (~50 Hz); vocoder expects sr/256 fps
 CONTENT_FPS = 50.0
 
 # F0 smoothing: reduce jitter that can cause "disturbance" / robotic sound
-F0_SMOOTH_KERNEL = 5  # frames (odd)
+F0_SMOOTH_KERNEL = 7  # frames (odd; larger = smoother, less jitter)
 F0_MIN_HZ = 50.0
 F0_MAX_HZ = 500.0
 
@@ -73,9 +75,10 @@ def _post_process_audio(
     wav: np.ndarray,
     sr: int,
     highpass_hz: float = 80.0,
-    gate_dbfs: float = -60.0,
+    gate_dbfs: Optional[float] = -60.0,
+    lowpass_hz: Optional[int] = None,
 ) -> np.ndarray:
-    """Light high-pass + RMS silence gate. Default -60 dBFS to avoid nuking speech."""
+    """Light high-pass + optional RMS gate + optional low-pass (reduces hiss). gate_dbfs None or <= -100 = gate disabled."""
     if sr <= 0 or len(wav) < 100:
         return wav
     out = wav.astype(np.float32)
@@ -85,7 +88,14 @@ def _post_process_audio(
         if cut < 1.0:
             b, a = butter(2, cut, btype="high")
             out = filtfilt(b, a, out.astype(np.float64)).astype(np.float32)
-    out = silence_gate_rms(out, sr, window_sec=0.02, threshold_dbfs=gate_dbfs)
+    if lowpass_hz is not None and lowpass_hz > 0 and lowpass_hz < sr // 2:
+        nyq = 0.5 * sr
+        cut = lowpass_hz / nyq
+        if cut < 1.0:
+            b, a = butter(2, cut, btype="low")
+            out = filtfilt(b, a, out.astype(np.float64)).astype(np.float32)
+    if gate_dbfs is not None and gate_dbfs > -100:
+        out = silence_gate_rms_smooth(out, sr, window_sec=0.02, threshold_dbfs=gate_dbfs, ramp_sec=0.01)
     return out
 
 
@@ -137,8 +147,8 @@ def convert_file(
     if not input_wav.exists():
         raise FileNotFoundError(f"Input WAV not found: {input_wav}")
 
-    # Model/vocoder SR is always 40k; load at 40k, save at out_sr or 40k (no mismatch)
-    sr = params.sample_rate  # 40000
+    # Single SR end-to-end (22,050 Hz); no mel time-downsample hack
+    sr = params.sample_rate  # 22050
     wav = load_wav(input_wav, sr)
     total_samples = len(wav)
 
@@ -154,19 +164,24 @@ def convert_file(
         weights_dir=params.rmvpe_dir,
         device=params.device,
     )
-    vc = VCModel(model_dir=model_dir, device=params.device)
+    vc = VCModel(
+        model_dir=model_dir,
+        device=params.device,
+        model_name=params.model_name,
+    )
     vocoder = HiFiGANVocoder(
         weights_dir=params.vocoder_dir or model_dir,
         device=params.device,
         sr=sr,
     )
-    index_feat = None  # TODO: load index and query per chunk if index_rate > 0
+    retrieval = load_index(model_dir, params.index_path, k=params.index_k) if params.index_rate > 0 else None
 
     if not params.streaming:
         # Full-file: one big chunk (no OLA, better for debugging quality)
         if len(wav_16k) < 320:
             out = np.zeros(total_samples, dtype=np.float32)
         else:
+            # content = phonetic/content from INPUT wav (accent lives here; we do not transform it)
             content = content_encoder.encode(wav_16k, cache=False)
             f0 = rmvpe.extract_f0(wav_16k, DEFAULT_SR_F0)
             n_content = content.shape[0]
@@ -179,6 +194,10 @@ def convert_file(
             f0 = _smooth_f0(f0)
             f0_t = torch.from_numpy(f0).to(params.device).unsqueeze(0).unsqueeze(-1)
             content_t = content.unsqueeze(0)
+            index_feat = None
+            if retrieval is not None and params.index_rate > 0:
+                index_arr = retrieval.get_index_feat(content.cpu().numpy(), k=params.index_k)
+                index_feat = torch.from_numpy(index_arr).to(params.device).unsqueeze(0)
             mel_or_wav = vc.forward(
                 content_t,
                 f0_t,
@@ -203,8 +222,9 @@ def convert_file(
             # Trim/pad to input length
             out = np.zeros(total_samples, dtype=np.float32)
             copy_len = min(len(wav_out), total_samples)
-            out[:copy_len] = wav_out[:copy_len].astype(np.float32)
-            out = _post_process_audio(out, sr)
+            if copy_len > 0:
+                out[:copy_len] = wav_out[:copy_len].astype(np.float32)
+            out = _post_process_audio(out, sr, gate_dbfs=params.post_gate_dbfs, lowpass_hz=params.lowpass_hz)
         output_wav.parent.mkdir(parents=True, exist_ok=True)
         out, save_sr = _finalize_output(out, sr, params.out_sr)
         save_wav(output_wav, out, save_sr)
@@ -246,7 +266,10 @@ def convert_file(
         f0 = _smooth_f0(f0)
         f0_t = torch.from_numpy(f0).to(params.device).unsqueeze(0).unsqueeze(-1)
         content_t = content.unsqueeze(0)
-
+        index_feat = None
+        if retrieval is not None and params.index_rate > 0:
+            index_arr = retrieval.get_index_feat(content.cpu().numpy(), k=params.index_k)
+            index_feat = torch.from_numpy(index_arr).to(params.device).unsqueeze(0)
         mel_or_wav = vc.forward(
             content_t,
             f0_t,
@@ -274,7 +297,7 @@ def convert_file(
         pad[:need] = wav_chunk[:need]
         ola.add_chunk(out, pad, start)
 
-    out = _post_process_audio(out, sr)
+    out = _post_process_audio(out, sr, gate_dbfs=params.post_gate_dbfs, lowpass_hz=params.lowpass_hz)
     output_wav.parent.mkdir(parents=True, exist_ok=True)
     out, save_sr = _finalize_output(out, sr, params.out_sr)
     save_wav(output_wav, out, save_sr)
