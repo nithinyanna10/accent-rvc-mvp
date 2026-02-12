@@ -29,6 +29,10 @@ Datasets are organized and ready for use.
     --model_dir models
   ```
 
+## Optional target: LJSpeech
+
+For **LJSpeech** as US English target (instead of BDL): place WAVs in e.g. `data/ljspeech/raw/`, run `build_manifest.py` and `feature_extract.py`, then train with `train_rvc.py` (same-speaker) or build parallel pairs with L2-ARCTIC if you have sentence alignment. The inference pipeline is unchanged; point `--model_dir` to the LJSpeech-trained model.
+
 ## Current structure
 
 ```
@@ -38,4 +42,5 @@ data/
     processed/     <- (created by preprocess.py)
     features/      <- (created by feature_extract.py)
   l2_arctic_flat/  <- 3,392 L2-ARCTIC WAVs (ASI, RRBI, TNI)
+  ljspeech/        <- (optional) LJSpeech WAVs as alternative US target
 ```
