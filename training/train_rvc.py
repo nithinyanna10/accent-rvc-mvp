@@ -78,6 +78,11 @@ def main() -> None:
     parser.add_argument("--normalize_mel", action="store_true", help="Normalize mel to ~0 mean, 1 std so loss is in reasonable range (not hundreds)")
     parser.add_argument("--mel_mean", type=float, default=-20.0, help="Mel mean for normalization (typical dB mel ~-20)")
     parser.add_argument("--mel_std", type=float, default=10.0, help="Mel std for normalization")
+    # Loss: L1 (better for mel) + optional L2 + multi-scale mel (like MR-STFT but on mel)
+    parser.add_argument("--loss_l1", type=float, default=1.0, help="Weight for L1 mel loss (recommended 1.0)")
+    parser.add_argument("--loss_l2", type=float, default=0.3, help="Weight for L2 mel loss (0 to disable)")
+    parser.add_argument("--multiscale_mel", action="store_true", help="Add multi-scale mel loss (2x and 4x time-downsampled L1)")
+    parser.add_argument("--multiscale_weight", type=float, default=0.5, help="Weight for multi-scale mel loss terms")
     args = parser.parse_args()
 
     feature_dir = Path(args.feature_dir)
@@ -92,6 +97,7 @@ def main() -> None:
         args.content_dim = int(data[0][0].shape[1])
         print(f"Inferred content_dim={args.content_dim} from features")
     print(f"Loaded {len(data)} segments")
+    print(f"Loss: L1={args.loss_l1}, L2={args.loss_l2}, multiscale_mel={args.multiscale_mel} (weight={args.multiscale_weight})")
 
     device = torch.device(args.device)
     net = MinimalGenerator(
@@ -131,6 +137,23 @@ def main() -> None:
             mel_target = (mel_target - args.mel_mean) / (args.mel_std + 1e-8)
         return content_t, f0_t, mel_target
 
+    def mel_loss(mel_pred: torch.Tensor, mel_target: torch.Tensor) -> torch.Tensor:
+        """L1 + optional L2 + optional multi-scale mel loss."""
+        loss = torch.tensor(0.0, device=mel_pred.device, dtype=mel_pred.dtype)
+        if args.loss_l1 > 0:
+            loss = loss + args.loss_l1 * nn.functional.l1_loss(mel_pred, mel_target)
+        if args.loss_l2 > 0:
+            loss = loss + args.loss_l2 * nn.functional.mse_loss(mel_pred, mel_target)
+        if args.multiscale_mel and args.multiscale_weight > 0:
+            # Multi-scale: L1 at 2x and 4x time-downsampled (like MR-STFT but on mel)
+            for k, stride in [(2, 2), (4, 4)]:
+                if mel_pred.shape[-1] < k:
+                    continue
+                p = nn.functional.avg_pool1d(mel_pred, kernel_size=k, stride=stride)
+                t = nn.functional.avg_pool1d(mel_target, kernel_size=k, stride=stride)
+                loss = loss + (args.multiscale_weight / stride) * nn.functional.l1_loss(p, t)
+        return loss
+
     step = 0
     pbar = tqdm(total=args.steps, desc="Train")
     while step < args.steps:
@@ -139,7 +162,7 @@ def main() -> None:
         for _ in range(args.accum):
             content_t, f0_t, mel_target = get_batch()
             mel_pred = net(content_t, f0_t)
-            loss = nn.functional.mse_loss(mel_pred, mel_target)
+            loss = mel_loss(mel_pred, mel_target)
             loss.backward()
             loss_acc += loss.item()
         torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)
