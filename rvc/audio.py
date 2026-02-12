@@ -96,3 +96,42 @@ def silence_gate_rms(
             if rms < threshold_linear:
                 out[i:] = 0.0
     return out.astype(np.float32)
+
+
+def silence_gate_rms_smooth(
+    wav: np.ndarray,
+    sr: int,
+    window_sec: float = 0.02,
+    threshold_dbfs: float = -60.0,
+    ramp_sec: float = 0.01,
+) -> np.ndarray:
+    """
+    Apply RMS-based gate with smooth gain (soft knee + smoothing) to reduce clicks.
+    Gain is smoothed over ramp_sec so gate open/close is not abrupt.
+    """
+    if len(wav) < 10 or sr <= 0:
+        return wav
+    window = max(1, int(sr * window_sec))
+    ramp_samples = max(1, int(sr * ramp_sec))
+    threshold_linear = 10.0 ** (threshold_dbfs / 20.0)
+    n = len(wav)
+    # RMS per small window, then interpolate to per-sample
+    n_win = (n + window - 1) // window
+    rms_per_win = np.zeros(n_win, dtype=np.float64)
+    for i in range(n_win):
+        start = i * window
+        end = min(start + window, n)
+        chunk = wav[start:end].astype(np.float64)
+        rms_per_win[i] = np.sqrt(np.mean(chunk ** 2) + 1e-12)
+    # Per-sample: linear interpolate RMS then soft knee gain = min(1, rms/threshold)
+    x_win = np.arange(n_win) * window + window // 2
+    x_sample = np.arange(n, dtype=np.float64)
+    rms_samp = np.interp(x_sample, x_win, rms_per_win).astype(np.float64)
+    gain = np.clip(rms_samp / (threshold_linear + 1e-12), 0.0, 1.0).astype(np.float64)
+    # Smooth gain to avoid sharp edges (moving average over ramp_samples)
+    from scipy.ndimage import uniform_filter1d
+    k = min(2 * ramp_samples + 1, len(gain))
+    if k > 1:
+        gain = uniform_filter1d(gain, size=k, mode="nearest")
+    out = (wav.astype(np.float64) * gain).astype(np.float32)
+    return out
