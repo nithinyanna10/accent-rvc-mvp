@@ -73,11 +73,14 @@ class VCModel:
                     self._config = json.load(f)
             content_dim = self._config.get("content_dim", 256)
             mel_dim = self._config.get("mel_dim", 80)
-            use_temporal = self._config.get("generator") == "temporal"
-            if use_temporal:
-                self._model = TemporalGenerator(content_dim=content_dim, f0_dim=1, mel_dim=mel_dim)
+            hidden = self._config.get("hidden", 256)
+            gen_type = self._config.get("generator", "minimal")
+            if gen_type == "temporal_v2":
+                self._model = TemporalGeneratorV2(content_dim=content_dim, f0_dim=1, mel_dim=mel_dim, hidden=hidden)
+            elif gen_type == "temporal":
+                self._model = TemporalGenerator(content_dim=content_dim, f0_dim=1, mel_dim=mel_dim, hidden=hidden)
             else:
-                self._model = MinimalGenerator(content_dim=content_dim, f0_dim=1, mel_dim=mel_dim)
+                self._model = MinimalGenerator(content_dim=content_dim, f0_dim=1, mel_dim=mel_dim, hidden=hidden)
             self._model.load_state_dict(raw, strict=False)
         if self.config_path.exists():
             with open(self.config_path) as f:
@@ -207,3 +210,46 @@ class TemporalGenerator(nn.Module):
         # Conv1d expects [B, C, T]
         x = x.transpose(1, 2)
         return self.temporal(x)
+
+
+class TemporalGeneratorV2(nn.Module):
+    """
+    Bigger temporal generator: 512 hidden, 4 residual conv blocks, kernel 9.
+    Better accent and stability; use --temporal_v2 when training.
+    content [B,T,C] + f0 [B,T,1] -> mel [B, n_mel, T].
+    """
+
+    def __init__(
+        self,
+        content_dim: int = 256,
+        f0_dim: int = 1,
+        mel_dim: int = 80,
+        hidden: int = 512,
+        kernel_size: int = 9,
+        num_blocks: int = 4,
+    ):
+        super().__init__()
+        self.in_dim = content_dim + f0_dim
+        self.hidden = hidden
+        self.mel_dim = mel_dim
+        padding = kernel_size // 2
+        self.enc = nn.Sequential(
+            nn.Conv1d(self.in_dim, hidden, kernel_size, padding=padding),
+            nn.GroupNorm(1, hidden),
+            nn.GELU(),
+        )
+        self.blocks = nn.ModuleList()
+        for _ in range(num_blocks - 1):
+            self.blocks.append(nn.Sequential(
+                nn.Conv1d(hidden, hidden, kernel_size, padding=padding),
+                nn.GroupNorm(1, hidden),
+                nn.GELU(),
+            ))
+        self.dec = nn.Conv1d(hidden, mel_dim, 1)
+
+    def forward(self, content: torch.Tensor, f0: torch.Tensor) -> torch.Tensor:
+        x = torch.cat([content, f0], dim=-1).transpose(1, 2)  # [B, in_dim, T]
+        x = self.enc(x)
+        for block in self.blocks:
+            x = x + block(x)  # residual
+        return self.dec(x)
