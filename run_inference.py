@@ -29,9 +29,10 @@ def main() -> int:
     parser.add_argument("-o", "--output", required=True, help="Output WAV path")
     parser.add_argument("--model_dir", type=str, default="models", help="Directory with checkpoint + config.json")
     parser.add_argument("--model_name", type=str, default=None, help="Checkpoint name, e.g. bdl_accent → bdl_accent_rvc.pth")
-    parser.add_argument("--streaming", type=int, default=1, choices=(0, 1), help="1=streaming (default), 0=full-file (often cleaner)")
+    parser.add_argument("--streaming", type=int, default=0, choices=(0, 1), help="0=full-file (default, cleaner), 1=streaming")
     parser.add_argument("--no-post-gate", action="store_true", help="Disable post-process silence gate (try if output has clicks)")
-    parser.add_argument("--lowpass", type=int, default=None, metavar="HZ", help="Low-pass cutoff in Hz to reduce hiss (e.g. 10000 or 12000)")
+    parser.add_argument("--lowpass", type=int, default=11000, metavar="HZ", help="Low-pass cutoff Hz to reduce hiss (default 11000; 0 = off)")
+    parser.add_argument("--no-mel-smooth", action="store_true", help="Disable mel temporal smoothing before vocoder")
     parser.add_argument("--device", type=str, default="cpu")
     parser.add_argument("--out_sr", type=int, default=None, help="Output sample rate (default: 22050)")
     args = parser.parse_args()
@@ -52,7 +53,8 @@ def main() -> int:
         index_rate=0.0,
         out_sr=args.out_sr,
         post_gate_dbfs=None if args.no_post_gate else -60.0,
-        lowpass_hz=args.lowpass,
+        lowpass_hz=args.lowpass if args.lowpass > 0 else None,
+        mel_smooth_frames=0 if args.no_mel_smooth else 5,
     )
     try:
         params.validate()
