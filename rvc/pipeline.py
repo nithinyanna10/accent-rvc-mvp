@@ -35,9 +35,11 @@ from .retrieval_index import load_index
 CONTENT_FPS = 50.0
 
 # F0 smoothing: reduce jitter that can cause "disturbance" / robotic sound
-F0_SMOOTH_KERNEL = 7  # frames (odd; larger = smoother, less jitter)
+F0_SMOOTH_KERNEL = 11  # frames (odd; larger = smoother, less jitter)
 F0_MIN_HZ = 50.0
 F0_MAX_HZ = 500.0
+# Mel smoothing along time before vocoder (reduces frame jitter)
+MEL_SMOOTH_FRAMES = 5  # 0 = disabled
 
 # Post-process gate: -60 dBFS so we don't nuke speech (was -45)
 GATE_THRESHOLD_DB = -60.0
@@ -53,13 +55,27 @@ def _smooth_f0(f0: np.ndarray) -> np.ndarray:
     return out
 
 
-def _interp_mel_to_vocoder_rate(mel: torch.Tensor, sr: int) -> torch.Tensor:
-    """Interpolate mel from content fps (~50) to vocoder fps (sr/256). Model outputs [B, 80, T_c]; vocoder needs [B, 80, T_v]."""
+def _smooth_mel_time(mel: np.ndarray, kernel: int = 5) -> np.ndarray:
+    """Light 1D smooth along time (last axis) to reduce mel jitter before vocoder."""
+    if kernel < 2 or mel.size == 0:
+        return mel
+    from scipy.ndimage import uniform_filter1d
+    out = mel.astype(np.float64)
+    for b in range(out.shape[0]):
+        for m in range(out.shape[1]):
+            out[b, m, :] = uniform_filter1d(out[b, m, :], size=min(kernel, out.shape[2]), mode="nearest")
+    return out.astype(np.float32)
+
+
+def _interp_mel_to_vocoder_rate(mel: torch.Tensor, sr: int, mel_smooth_frames: int = 0) -> torch.Tensor:
+    """Interpolate mel from content fps (~50) to vocoder fps (sr/256). Optionally smooth mel along time first."""
     if mel.dim() != 3 or mel.shape[1] != 80:
         return mel
     B, _, T_c = mel.shape
-    T_v = max(1, int(T_c * (sr / 256.0) / CONTENT_FPS))
     mel_np = mel.cpu().numpy()
+    if mel_smooth_frames > 0:
+        mel_np = _smooth_mel_time(mel_np, kernel=mel_smooth_frames)
+    T_v = max(1, int(T_c * (sr / 256.0) / CONTENT_FPS))
     out = np.zeros((B, 80, T_v), dtype=np.float32)
     for b in range(B):
         for m in range(80):
@@ -213,7 +229,7 @@ def convert_file(
             mel_for_debug = mel_or_wav.squeeze(0) if mel_or_wav.dim() == 3 else mel_or_wav
             _debug_print(0, content, f0, mel_for_debug)
             if mel_or_wav.dim() == 3 and mel_or_wav.shape[1] > 1:
-                mel_voc = _interp_mel_to_vocoder_rate(mel_or_wav, sr)
+                mel_voc = _interp_mel_to_vocoder_rate(mel_or_wav, sr, mel_smooth_frames=params.mel_smooth_frames)
                 wav_out = vocoder.decode(mel_voc.squeeze(0))
             else:
                 wav_out = mel_or_wav.squeeze().cpu().numpy()
@@ -285,7 +301,7 @@ def convert_file(
             _debug_print(chunk_index, content, f0, mel_or_wav.squeeze(0) if mel_or_wav.dim() == 3 else mel_or_wav)
             debug_done = True
         if mel_or_wav.dim() == 3 and mel_or_wav.shape[1] > 1:
-            mel_voc = _interp_mel_to_vocoder_rate(mel_or_wav, sr)
+            mel_voc = _interp_mel_to_vocoder_rate(mel_or_wav, sr, mel_smooth_frames=params.mel_smooth_frames)
             wav_chunk = vocoder.decode(mel_voc.squeeze(0))
         else:
             wav_chunk = mel_or_wav.squeeze().cpu().numpy()
