@@ -19,7 +19,7 @@ from tqdm import tqdm
 sys_path = Path(__file__).resolve().parent.parent
 import sys
 sys.path.insert(0, str(sys_path))
-from rvc.vc_model import MinimalGenerator, TemporalGenerator
+from rvc.vc_model import MinimalGenerator, TemporalGenerator, TemporalGeneratorV2
 
 
 def load_paired_features(
@@ -97,7 +97,9 @@ def main() -> None:
     parser.add_argument("--loss_l2", type=float, default=0.3)
     parser.add_argument("--multiscale_mel", action="store_true")
     parser.add_argument("--multiscale_weight", type=float, default=0.5)
-    parser.add_argument("--temporal", action="store_true", help="Use TemporalGenerator (1D conv) for better accent and less jitter")
+    parser.add_argument("--temporal", action="store_true", help="Use TemporalGenerator (1D conv)")
+    parser.add_argument("--temporal_v2", action="store_true", help="Use TemporalGeneratorV2 (512 hidden, 4 residual blocks, best quality)")
+    parser.add_argument("--hidden", type=int, default=512, help="Hidden size for temporal models (default 512 for v2)")
     args = parser.parse_args()
 
     paired_path = Path(args.paired_manifest)
@@ -120,14 +122,22 @@ def main() -> None:
         args.content_dim = int(data[0][0].shape[1])
         print(f"Inferred content_dim={args.content_dim}")
     print(f"Loaded {len(data)} parallel (Indian → BDL) pairs")
-    print(f"Loss: L1={args.loss_l1}, L2={args.loss_l2}, multiscale_mel={args.multiscale_mel}, temporal={args.temporal}")
+    print(f"Loss: L1={args.loss_l1}, L2={args.loss_l2}, multiscale_mel={args.multiscale_mel}, temporal={args.temporal}, temporal_v2={args.temporal_v2}")
 
     device = torch.device(args.device)
-    if args.temporal:
+    if args.temporal_v2:
+        net = TemporalGeneratorV2(
+            content_dim=args.content_dim,
+            f0_dim=1,
+            mel_dim=args.mel_dim,
+            hidden=args.hidden,
+        ).to(device)
+    elif args.temporal:
         net = TemporalGenerator(
             content_dim=args.content_dim,
             f0_dim=1,
             mel_dim=args.mel_dim,
+            hidden=args.hidden,
         ).to(device)
     else:
         net = MinimalGenerator(
@@ -208,8 +218,11 @@ def main() -> None:
                 "mel_std": args.mel_std,
                 "accent_conversion": True,
                 "trained_on": "Indian (L2) content → BDL mel",
-                "generator": "temporal" if args.temporal else "minimal",
+                "generator": "temporal_v2" if args.temporal_v2 else ("temporal" if args.temporal else "minimal"),
+                "hidden": args.hidden if (args.temporal_v2 or args.temporal) else None,
             }
+            if config.get("hidden") is None:
+                config.pop("hidden", None)
             with open(model_dir / "config.json", "w") as f:
                 json.dump(config, f, indent=2)
             print(f"Saved {ckpt_path} + config.json")
@@ -225,8 +238,11 @@ def main() -> None:
         "mel_std": args.mel_std,
         "accent_conversion": True,
         "trained_on": "Indian (L2) content → BDL mel",
-        "generator": "temporal" if args.temporal else "minimal",
+        "generator": "temporal_v2" if args.temporal_v2 else ("temporal" if args.temporal else "minimal"),
+        "hidden": args.hidden if (args.temporal_v2 or args.temporal) else None,
     }
+    if config.get("hidden") is None:
+        config.pop("hidden", None)
     with open(model_dir / "config.json", "w") as f:
         json.dump(config, f, indent=2)
     print(f"Done: {model_dir / f'{args.name}_rvc.pth'}, config.json (Indian → American accent model)")
