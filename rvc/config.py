@@ -39,6 +39,8 @@ class InferenceParams:
     post_gate_dbfs: Optional[float] = -60.0
     # Low-pass filter (Hz) to reduce hiss; None = disabled. Try 10000–12000 if output is harsh.
     lowpass_hz: Optional[int] = None
+    # Mel temporal smoothing (frames) before vocoder; 0 = off. 3–5 reduces jitter.
+    mel_smooth_frames: int = 5
     # Optional
     cpu_threads: int = 0  # 0 = default
 
