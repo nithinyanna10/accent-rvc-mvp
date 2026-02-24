@@ -78,8 +78,3 @@ To get **US accent** from Indian input, we’d need one of these (all are beyond
 2. **ASR + TTS**  
    Indian WAV → ASR → text → TTS (US accent) → US WAV.  
    No ContentVec; different pipeline.
-
-3. **Train on “Indian content → US mel”**  
-   Would require **paired data**: same sentences in Indian (for content) and US (for mel). Hard to get; not what we have with BDL + L2-ARCTIC.
-
-So: **with the current design (content from input WAV only, no content transform), output accent will always follow input accent.** The model only changes the “voice” (mel), not the “pronunciation” (content).
