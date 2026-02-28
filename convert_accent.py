@@ -43,6 +43,8 @@ def main() -> int:
     parser.add_argument("--out_sr", type=int, default=None, help="Output sample rate (default: 22050). Use 44100 for playback.")
     parser.add_argument("--no-post-gate", action="store_true", help="Disable post-process silence gate (can reduce disturbance)")
     parser.add_argument("--lowpass", type=int, default=None, metavar="HZ", help="Low-pass cutoff Hz to reduce hiss (e.g. 10000)")
+    parser.add_argument("--blend", type=float, default=1.0, metavar="0..1", help="Wet/dry mix: 1.0=full conversion (default), 0.0=original, 0.5=equal mix")
+    parser.add_argument("--blend_mode", type=str, default="waveform", choices=("waveform", "spectral"), help="Blend mode: waveform (fast) or spectral (smoother). default: waveform")
     args = parser.parse_args()
 
     model_dir = Path(args.model_dir)
@@ -73,6 +75,8 @@ def main() -> int:
         out_sr=args.out_sr,
         post_gate_dbfs=None if args.no_post_gate else -60.0,
         lowpass_hz=args.lowpass,
+        blend=args.blend,
+        blend_mode=args.blend_mode,
     )
     try:
         params.validate()
