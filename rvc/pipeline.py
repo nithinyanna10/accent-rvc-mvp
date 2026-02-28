@@ -29,6 +29,7 @@ from .pitch_rmvpe import RMVPExtractor, DEFAULT_SR_F0
 from .vocoder_hifigan import HiFiGANVocoder
 from .vc_model import VCModel
 from .retrieval_index import load_index
+from .blend import apply_accent_strength
 
 
 # Content encoder frame rate (~50 Hz); vocoder expects sr/256 fps
@@ -241,6 +242,15 @@ def convert_file(
             if copy_len > 0:
                 out[:copy_len] = wav_out[:copy_len].astype(np.float32)
             out = _post_process_audio(out, sr, gate_dbfs=params.post_gate_dbfs, lowpass_hz=params.lowpass_hz)
+        # Wet/dry blend with original
+        blend = getattr(params, "blend", 1.0)
+        blend_mode = getattr(params, "blend_mode", "waveform")
+        if 0.0 <= blend < 1.0:
+            # Align original to same length
+            orig_aligned = np.zeros(len(out), dtype=np.float32)
+            orig_len = min(len(wav), len(out))
+            orig_aligned[:orig_len] = wav[:orig_len]
+            out = apply_accent_strength(orig_aligned, out, strength=blend, mode=blend_mode, sr=sr)
         output_wav.parent.mkdir(parents=True, exist_ok=True)
         out, save_sr = _finalize_output(out, sr, params.out_sr)
         save_wav(output_wav, out, save_sr)
@@ -314,6 +324,14 @@ def convert_file(
         ola.add_chunk(out, pad, start)
 
     out = _post_process_audio(out, sr, gate_dbfs=params.post_gate_dbfs, lowpass_hz=params.lowpass_hz)
+    # Wet/dry blend with original (streaming path)
+    blend = getattr(params, "blend", 1.0)
+    blend_mode = getattr(params, "blend_mode", "waveform")
+    if 0.0 <= blend < 1.0:
+        orig_aligned = np.zeros(len(out), dtype=np.float32)
+        orig_len = min(len(wav), len(out))
+        orig_aligned[:orig_len] = wav[:orig_len]
+        out = apply_accent_strength(orig_aligned, out, strength=blend, mode=blend_mode, sr=sr)
     output_wav.parent.mkdir(parents=True, exist_ok=True)
     out, save_sr = _finalize_output(out, sr, params.out_sr)
     save_wav(output_wav, out, save_sr)
