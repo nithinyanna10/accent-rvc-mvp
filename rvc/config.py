@@ -41,6 +41,11 @@ class InferenceParams:
     lowpass_hz: Optional[int] = None
     # Mel temporal smoothing (frames) before vocoder; 0 = off. 3–5 reduces jitter.
     mel_smooth_frames: int = 5
+    # Wet/dry blend: 1.0 = full conversion, 0.0 = original passthrough.
+    # Values in between linearly mix original and converted waveforms.
+    blend: float = 1.0
+    # Spectral blend mode: 'waveform' (fast) or 'spectral' (smoother, needs librosa).
+    blend_mode: str = "waveform"
     # Optional
     cpu_threads: int = 0  # 0 = default
 
