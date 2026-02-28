@@ -1,7 +1,7 @@
 # accent_rvc_mvp - CPU-only, Python 3.10+
 # Install: pip install -r requirements.txt
 
-# Core
+# ── Core ──────────────────────────────────────────────────────────────────────
 torch>=2.0.0
 torchaudio>=2.0.0
 numpy>=1.24.0,<2.0.0
@@ -10,19 +10,29 @@ soundfile>=0.12.0
 librosa>=0.10.0
 resampy>=0.4.0
 
-# Optional: ONNX runtime for ContentVec/RMVPE if using ONNX export
-# onnxruntime>=1.15.0
-
-# ContentVec (fairseq) - install from git if using checkpoint_best_*.pt
-# pip install "git+https://github.com/facebookresearch/fairseq.git"
-
 # Config and CLI
 tqdm>=4.65.0
 pydantic>=2.0.0
 PyYAML>=6.0
 
-# Optional: retrieval index (use sklearn if faiss-cpu is problematic on macOS)
+# ── Retrieval index ────────────────────────────────────────────────────────────
+# Optional; use sklearn if faiss-cpu is problematic on Apple Silicon
 faiss-cpu>=1.7.4
 scikit-learn>=1.3.0
 
-# Training (same as above; no extra deps for CPU)
+# ── Real-time mic streaming (realtime_mic.py) ─────────────────────────────────
+sounddevice>=0.4.6          # cross-platform audio I/O (PortAudio backend)
+
+# ── Web UI (webui.py) ─────────────────────────────────────────────────────────
+gradio>=4.0.0               # pip install gradio
+
+# ── ONNX export + fast inference (rvc/export_onnx.py) ────────────────────────
+onnx>=1.14.0
+onnxruntime>=1.15.0         # CPU runtime; use onnxruntime-gpu on CUDA systems
+
+# ── ContentVec (fairseq) ──────────────────────────────────────────────────────
+# Install from git if using checkpoint_best_*.pt format:
+#   pip install "git+https://github.com/facebookresearch/fairseq.git"
+
+# ── Training ──────────────────────────────────────────────────────────────────
+# (same packages as above; no extra GPU deps needed for CPU training)
